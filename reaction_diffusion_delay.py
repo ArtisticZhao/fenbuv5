@@ -27,6 +27,7 @@ class SimulationParams:
     d1: float = 1.0
     d2: float = 3.0
     r1: float = 0.1
+    u_bar: float = 1.0
     tau: float = 2.0
     epsilon: float = 1.5
     L: float = np.pi
