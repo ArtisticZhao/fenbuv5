@@ -11,6 +11,7 @@ import numpy as np
 
 from hopf_branch import (
     HopfSearchConfig,
+    HopfPoint,
     compute_hopf_branches,
     hopf_points_from_branches,
     plot_hopf_branches,
@@ -28,6 +29,34 @@ HOPF_DEFAULTS = HopfSearchConfig()
 
 def format_int_list(values: tuple[int, ...]) -> str:
     return ",".join(str(value) for value in values)
+
+
+def format_run_title(
+    params: SimulationParams,
+    mode: int,
+    amplitude: float,
+    *,
+    hopf_point: HopfPoint | None = None,
+    hopf_config: HopfSearchConfig | None = None,
+) -> str:
+    sim_line = (
+        "Simulation: "
+        f"d1={params.d1:g}, d2={params.d2:g}, r1={params.r1:g}, "
+        f"u_bar={params.u_bar:g}, tau={params.tau:g}, epsilon={params.epsilon:.6g}, "
+        f"L={params.L:.6g}, Nx={params.Nx}, dt={params.dt:g}, Tend={params.Tend:g}, "
+        f"mode={mode}, amp={amplitude:g}"
+    )
+    if hopf_point is None or hopf_config is None:
+        return sim_line + "\nHopf: disabled"
+    hopf_line = (
+        "Hopf: "
+        f"epsilon={hopf_point.epsilon:.6g}, omega={hopf_point.omega:.6g}, "
+        f"n={hopf_point.n}, k={hopf_point.k}, mu={hopf_point.mu:.6g}, "
+        f"S={hopf_point.s_value:.3e}, "
+        f"fu={hopf_config.fu:.6g}, l={hopf_config.domain_factor:.6g}, "
+        f"eps_grid={hopf_config.num_eps}, omega_grid={hopf_config.num_omega}"
+    )
+    return sim_line + "\n" + hopf_line
 
 
 def parse_args() -> argparse.Namespace:
@@ -59,8 +88,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--hopf-index",
         type=int,
-        default=0,
-        help="Index of the sorted Hopf candidate to simulate.",
+        default=None,
+        help="Index of the sorted Hopf candidate to simulate. Omit to simulate all candidates.",
     )
     parser.add_argument(
         "--plot-hopf",
@@ -214,7 +243,7 @@ def make_model_params(args: argparse.Namespace) -> SimulationParams:
 
 def find_hopf_simulation_params(
     base_params: SimulationParams,
-    candidate_index: int,
+    candidate_index: int | None,
     num_eps: int,
     num_omega: int,
     eps_min: float,
@@ -225,7 +254,7 @@ def find_hopf_simulation_params(
     k_list: tuple[int, ...],
     plot_hopf: bool,
     block_hopf_plot: bool = False,
-) -> tuple[SimulationParams, int]:
+) -> list[tuple[SimulationParams, int, HopfPoint, HopfSearchConfig]]:
     if base_params.L <= 0:
         raise ValueError("L must be positive")
     if not np.isclose(base_params.L / np.pi, round(base_params.L / np.pi), atol=1.0e-10):
@@ -273,7 +302,7 @@ def find_hopf_simulation_params(
         if plot_hopf:
             plot_hopf_branches(branches, config, show=True, block=block_hopf_plot)
         raise RuntimeError("No Hopf branch candidates found.")
-    if not 0 <= candidate_index < len(points):
+    if candidate_index is not None and not 0 <= candidate_index < len(points):
         if plot_hopf:
             plot_hopf_branches(branches, config, show=True, block=block_hopf_plot)
         raise ValueError(
@@ -287,22 +316,32 @@ def find_hopf_simulation_params(
             f"n={point.n}, k={point.k}, mu={point.mu:.8f}, S={point.s_value:.3e}"
         )
 
-    point = points[candidate_index]
     if plot_hopf:
         plot_hopf_branches(branches, config, show=True, block=block_hopf_plot)
 
-    params = replace(base_params, epsilon=point.epsilon)
-    print(
-        "Selected Hopf point: "
-        f"epsilon={point.epsilon:.8f}, omega={point.omega:.8f}, "
-        f"n={point.n}, k={point.k}. "
-        f"Simulation keeps d2={params.d2:.6g}, r1={params.r1:.6g}, L={params.L:.6g}; "
-        "only epsilon is replaced by the selected branch value."
-    )
-    return params, point.n
+    selected_points = points if candidate_index is None else [points[candidate_index]]
+    if candidate_index is None:
+        print(f"No hopf-index specified; simulating all {len(selected_points)} candidate(s).")
+
+    run_specs = []
+    for point in selected_points:
+        params = replace(base_params, epsilon=point.epsilon)
+        print(
+            "Selected Hopf point: "
+            f"epsilon={point.epsilon:.8f}, omega={point.omega:.8f}, "
+            f"n={point.n}, k={point.k}. "
+            f"Simulation keeps d2={params.d2:.6g}, r1={params.r1:.6g}, L={params.L:.6g}; "
+            "only epsilon is replaced by the selected branch value."
+        )
+        run_specs.append((params, point.n, point, config))
+    return run_specs
 
 
-def make_live_plot_callback(params: SimulationParams, update_step: int = 200):
+def make_live_plot_callback(
+    params: SimulationParams,
+    title: str,
+    update_step: int = 200,
+):
     steps = int(round(params.Tend / params.dt))
     solution = np.zeros((steps + 1, params.Nx), dtype=float)
     residuals = np.zeros(steps + 1, dtype=float)
@@ -312,6 +351,7 @@ def make_live_plot_callback(params: SimulationParams, update_step: int = 200):
     probe_positions = np.array([params.L / 4.0, params.L / 2.0, 3.0 * params.L / 4.0])
 
     fig, axes = plt.subplots(2, 2, figsize=(13, 9))
+    fig.suptitle(title, fontsize=10)
     ax1, ax2, ax3, ax4 = axes.ravel()
 
     line, = ax1.plot([], [], "b-", linewidth=2)
@@ -355,7 +395,7 @@ def make_live_plot_callback(params: SimulationParams, update_step: int = 200):
     ax4.legend(loc="best")
     ax4.grid(True)
 
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0, 1, 0.92])
     plt.show(block=False)
 
     def callback(state: dict[str, object]) -> None:
@@ -390,13 +430,14 @@ def make_live_plot_callback(params: SimulationParams, update_step: int = 200):
     return callback
 
 
-def plot_final_result(result, params: SimulationParams) -> None:
+def plot_final_result(result, params: SimulationParams, title: str) -> None:
     probe_positions = np.array([params.L / 4.0, params.L / 2.0, 3.0 * params.L / 4.0])
     probe_indices = [
         int(np.argmin(np.abs(result.x - position))) for position in probe_positions
     ]
 
     fig, axes = plt.subplots(2, 2, figsize=(13, 9))
+    fig.suptitle(title, fontsize=10)
     ax1, ax2, ax3, ax4 = axes.ravel()
 
     ax1.plot(result.x, result.u[-1], "b-", linewidth=2)
@@ -435,7 +476,7 @@ def plot_final_result(result, params: SimulationParams) -> None:
     ax4.legend(loc="best")
     ax4.grid(True)
 
-    plt.tight_layout()
+    plt.tight_layout(rect=[0, 0, 1, 0.92])
     plt.show()
 
 
@@ -449,7 +490,7 @@ def main() -> None:
 
     base_params = make_model_params(args)
     if args.hopf == 1:
-        params, mode = find_hopf_simulation_params(
+        run_specs = find_hopf_simulation_params(
             base_params,
             args.hopf_index,
             args.num_eps,
@@ -464,45 +505,55 @@ def main() -> None:
             args.dry_run == 1,
         )
     else:
-        params = base_params
-        mode = args.init_mode
+        run_specs = [(base_params, args.init_mode, None, None)]
 
-    print(
-        "Simulation parameters: "
-        f"d1={params.d1}, d2={params.d2}, r1={params.r1}, "
-        f"u_bar={params.u_bar}, tau={params.tau}, epsilon={params.epsilon}, "
-        f"L={params.L}, Nx={params.Nx}, dt={params.dt}, Tend={params.Tend}, "
-        f"initial_mode={mode}, amp={args.amp}"
-    )
+    for run_index, (params, mode, hopf_point, hopf_config) in enumerate(run_specs):
+        print(
+            f"Simulation run {run_index + 1}/{len(run_specs)} parameters: "
+            f"d1={params.d1}, d2={params.d2}, r1={params.r1}, "
+            f"u_bar={params.u_bar}, tau={params.tau}, epsilon={params.epsilon}, "
+            f"L={params.L}, Nx={params.Nx}, dt={params.dt}, Tend={params.Tend}, "
+            f"initial_mode={mode}, amp={args.amp}"
+        )
+        if args.dry_run == 1:
+            continue
+
+        run_title = format_run_title(
+            params,
+            mode,
+            args.amp,
+            hopf_point=hopf_point,
+            hopf_config=hopf_config,
+        )
+        callback = make_live_plot_callback(params, run_title) if plot == 1 else None
+
+        result = run_simulation(
+            params,
+            initial_condition=make_cosine_initial_condition(
+                params.u_bar,
+                args.amp,
+                mode,
+                params.L,
+            ),
+            progress_callback=callback,
+        )
+
+        print(f"Finished run {run_index + 1}/{len(run_specs)}: steps={result.t.size - 1}, t={result.t[-1]:.3f}")
+        print(
+            "Final metrics: "
+            f"min={result.min_u[-1]:.6f}, "
+            f"max={result.max_u[-1]:.6f}, "
+            f"mean={result.mean_u[-1]:.6f}, "
+            f"max_cfl={np.max(result.cfl):.6e}, "
+            f"last_residual={result.residuals[-1]:.6e}"
+        )
+
+        if plot == 0:
+            plot_final_result(result, params, run_title)
+
     if args.dry_run == 1:
         return
-
-    callback = make_live_plot_callback(params) if plot == 1 else None
-
-    result = run_simulation(
-        params,
-        initial_condition=make_cosine_initial_condition(
-            params.u_bar,
-            args.amp,
-            mode,
-            params.L,
-        ),
-        progress_callback=callback,
-    )
-
-    print(f"Finished: steps={result.t.size - 1}, t={result.t[-1]:.3f}")
-    print(
-        "Final metrics: "
-        f"min={result.min_u[-1]:.6f}, "
-        f"max={result.max_u[-1]:.6f}, "
-        f"mean={result.mean_u[-1]:.6f}, "
-        f"max_cfl={np.max(result.cfl):.6e}, "
-        f"last_residual={result.residuals[-1]:.6e}"
-    )
-
-    if plot == 0:
-        plot_final_result(result, params)
-    else:
+    if plot == 1:
         plt.show()
 
 
