@@ -25,12 +25,12 @@ ProgressCallback = Callable[[dict[str, object]], None]
 @dataclass(frozen=True)
 class SimulationParams:
     d1: float = 1.0
-    d2: float = 3.0
+    d2: float = 3
     r1: float = 0.1
     u_bar: float = 1.0
     tau: float = 2.0
     epsilon: float = 1.5
-    L: float = np.pi
+    L: float = 1.0 * np.pi
     Nx: int = 101
     dt: float = 0.05
     Tend: float = 300.0

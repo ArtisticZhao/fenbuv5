@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import os
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
@@ -14,7 +15,19 @@ from hopf_branch import (
     hopf_points_from_branches,
     plot_hopf_branches,
 )
-from reaction_diffusion_delay import SimulationParams, run_simulation
+from reaction_diffusion_delay import (
+    SimulationParams,
+    make_cosine_initial_condition,
+    run_simulation,
+)
+
+
+MODEL_DEFAULTS = SimulationParams()
+HOPF_DEFAULTS = HopfSearchConfig()
+
+
+def format_int_list(values: tuple[int, ...]) -> str:
+    return ",".join(str(value) for value in values)
 
 
 def parse_args() -> argparse.Namespace:
@@ -59,13 +72,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--num-eps",
         type=int,
-        default=220,
+        default=HOPF_DEFAULTS.num_eps,
         help="Number of epsilon samples used by Hopf search.",
     )
     parser.add_argument(
         "--num-omega",
         type=int,
-        default=12000,
+        default=HOPF_DEFAULTS.num_omega,
         help="Number of omega samples used by Hopf search.",
     )
     parser.add_argument(
@@ -90,85 +103,85 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--tend",
         type=float,
-        default=None,
-        help="Override simulation end time.",
+        default=MODEL_DEFAULTS.Tend,
+        help="Simulation end time.",
     )
     parser.add_argument(
         "--dt",
         type=float,
-        default=None,
-        help="Override simulation time step.",
+        default=MODEL_DEFAULTS.dt,
+        help="Simulation time step.",
     )
     parser.add_argument(
         "--nx",
         type=int,
-        default=None,
-        help="Override number of spatial cells.",
+        default=MODEL_DEFAULTS.Nx,
+        help="Number of spatial cells.",
     )
-    parser.add_argument("--d1", type=float, default=1.0, help="Diffusion coefficient d1.")
-    parser.add_argument("--d2", type=float, default=-5.8, help="Nonlocal flux coefficient d2.")
-    parser.add_argument("--r1", type=float, default=0.5, help="Logistic reaction coefficient r1.")
-    parser.add_argument("--u-bar", type=float, default=1.0, help="Homogeneous steady state u_bar.")
-    parser.add_argument("--tau", type=float, default=2.0, help="Delay length tau.")
+    parser.add_argument("--d1", type=float, default=MODEL_DEFAULTS.d1, help="Diffusion coefficient d1.")
+    parser.add_argument("--d2", type=float, default=MODEL_DEFAULTS.d2, help="Nonlocal flux coefficient d2.")
+    parser.add_argument("--r1", type=float, default=MODEL_DEFAULTS.r1, help="Logistic reaction coefficient r1.")
+    parser.add_argument("--u-bar", type=float, default=MODEL_DEFAULTS.u_bar, help="Homogeneous steady state u_bar.")
+    parser.add_argument("--tau", type=float, default=MODEL_DEFAULTS.tau, help="Delay length tau.")
     parser.add_argument(
         "--epsilon",
         type=float,
-        default=0.8,
+        default=MODEL_DEFAULTS.epsilon,
         help="Delay kernel epsilon used when --hopf 0. Hopf mode replaces it with the selected branch value.",
     )
-    parser.add_argument("--L", type=float, default=3.0 * np.pi, help="Domain length L.")
+    parser.add_argument("--L", type=float, default=MODEL_DEFAULTS.L, help="Domain length L.")
     parser.add_argument(
         "--sweep-tol",
         type=float,
-        default=1.0e-4,
+        default=MODEL_DEFAULTS.sweep_tol,
         help="FiPy sweep residual tolerance.",
     )
     parser.add_argument(
         "--stagnation-tol",
         type=float,
-        default=1.0e-5,
+        default=MODEL_DEFAULTS.stagnation_tol,
         help="Sweep stagnation tolerance.",
     )
     parser.add_argument(
         "--max-sweeps",
         type=int,
-        default=200,
+        default=MODEL_DEFAULTS.max_sweeps,
         help="Maximum sweeps per time step.",
     )
     parser.add_argument(
         "--omega-min",
         type=float,
-        default=1.0e-4,
+        default=HOPF_DEFAULTS.omega_min,
         help="Minimum omega used by Hopf search.",
     )
     parser.add_argument(
         "--omega-max",
         type=float,
-        default=80.0,
+        default=HOPF_DEFAULTS.omega_max,
         help="Maximum omega used by Hopf search.",
     )
     parser.add_argument(
         "--eps-min",
         type=float,
-        default=0.02,
+        default=HOPF_DEFAULTS.eps_min,
         help="Minimum epsilon used by Hopf search.",
     )
     parser.add_argument(
         "--eps-max-margin",
         type=float,
-        default=0.02,
+        default=HOPF_DEFAULTS.eps_max_margin,
         help="Hopf search uses tau - eps_max_margin as maximum epsilon.",
     )
     parser.add_argument(
         "--n-list",
         type=str,
-        default="1,3,5,7",
+        default=format_int_list(HOPF_DEFAULTS.n_list),
         help="Comma-separated mode list used by Hopf search.",
     )
     parser.add_argument(
         "--k-list",
         type=str,
-        default="0",
+        default=format_int_list(HOPF_DEFAULTS.k_list),
         help="Comma-separated k list used by Hopf search.",
     )
     return parser.parse_args()
@@ -190,20 +203,13 @@ def make_model_params(args: argparse.Namespace) -> SimulationParams:
         tau=args.tau,
         epsilon=args.epsilon,
         L=args.L,
-        Nx=args.nx if args.nx is not None else 101,
-        dt=args.dt if args.dt is not None else 0.05,
-        Tend=args.tend if args.tend is not None else 300.0,
+        Nx=args.nx,
+        dt=args.dt,
+        Tend=args.tend,
         sweep_tol=args.sweep_tol,
         stagnation_tol=args.stagnation_tol,
         max_sweeps=args.max_sweeps,
     )
-
-
-def make_initial_condition(params: SimulationParams, mode: int, amplitude: float):
-    def initial_condition(x: np.ndarray) -> np.ndarray:
-        return params.u_bar + amplitude * np.cos(mode * np.pi * x / params.L)
-
-    return initial_condition
 
 
 def find_hopf_simulation_params(
@@ -285,21 +291,7 @@ def find_hopf_simulation_params(
     if plot_hopf:
         plot_hopf_branches(branches, config, show=True, block=block_hopf_plot)
 
-    params = SimulationParams(
-        d1=base_params.d1,
-        d2=base_params.d2,
-        r1=base_params.r1,
-        u_bar=base_params.u_bar,
-        tau=base_params.tau,
-        epsilon=point.epsilon,
-        L=base_params.L,
-        Nx=base_params.Nx,
-        dt=base_params.dt,
-        Tend=base_params.Tend,
-        sweep_tol=base_params.sweep_tol,
-        stagnation_tol=base_params.stagnation_tol,
-        max_sweeps=base_params.max_sweeps,
-    )
+    params = replace(base_params, epsilon=point.epsilon)
     print(
         "Selected Hopf point: "
         f"epsilon={point.epsilon:.8f}, omega={point.omega:.8f}, "
@@ -489,7 +481,12 @@ def main() -> None:
 
     result = run_simulation(
         params,
-        initial_condition=make_initial_condition(params, mode, args.amp),
+        initial_condition=make_cosine_initial_condition(
+            params.u_bar,
+            args.amp,
+            mode,
+            params.L,
+        ),
         progress_callback=callback,
     )
 
