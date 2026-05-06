@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import replace
 import os
+from pathlib import Path
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
@@ -128,6 +129,12 @@ def parse_args() -> argparse.Namespace:
         choices=(0, 1),
         default=0,
         help="1: find parameters and print them without running the simulation.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=Path("output"),
+        help="Directory for saved final plots and numerical result files.",
     )
     parser.add_argument(
         "--tend",
@@ -430,7 +437,80 @@ def make_live_plot_callback(
     return callback
 
 
-def plot_final_result(result, params: SimulationParams, title: str) -> None:
+def save_result_data(
+    result,
+    params: SimulationParams,
+    mode: int,
+    amplitude: float,
+    output_path: Path,
+    *,
+    hopf_point: HopfPoint | None = None,
+    hopf_config: HopfSearchConfig | None = None,
+) -> None:
+    hopf_values = {
+        "hopf_enabled": hopf_point is not None,
+        "hopf_epsilon": np.nan,
+        "hopf_omega": np.nan,
+        "hopf_n": -1,
+        "hopf_k": -1,
+        "hopf_mu": np.nan,
+        "hopf_s_value": np.nan,
+        "hopf_fu": np.nan,
+        "hopf_domain_factor": np.nan,
+    }
+    if hopf_point is not None and hopf_config is not None:
+        hopf_values.update(
+            {
+                "hopf_epsilon": hopf_point.epsilon,
+                "hopf_omega": hopf_point.omega,
+                "hopf_n": hopf_point.n,
+                "hopf_k": hopf_point.k,
+                "hopf_mu": hopf_point.mu,
+                "hopf_s_value": hopf_point.s_value,
+                "hopf_fu": hopf_config.fu,
+                "hopf_domain_factor": hopf_config.domain_factor,
+            }
+        )
+    np.savez_compressed(
+        output_path,
+        x=result.x,
+        t=result.t,
+        u=result.u,
+        residuals=result.residuals,
+        sweep_counts=result.sweep_counts,
+        min_u=result.min_u,
+        max_u=result.max_u,
+        mean_u=result.mean_u,
+        cfl=result.cfl,
+        h_weights=result.h_weights,
+        s_vec=result.s_vec,
+        d1=params.d1,
+        d2=params.d2,
+        r1=params.r1,
+        u_bar=params.u_bar,
+        tau=params.tau,
+        epsilon=params.epsilon,
+        L=params.L,
+        Nx=params.Nx,
+        dt=params.dt,
+        Tend=params.Tend,
+        sweep_tol=params.sweep_tol,
+        stagnation_tol=params.stagnation_tol,
+        max_sweeps=params.max_sweeps,
+        initial_mode=mode,
+        amplitude=amplitude,
+        **hopf_values,
+    )
+
+
+def plot_final_result(
+    result,
+    params: SimulationParams,
+    title: str,
+    *,
+    save_path: Path | None = None,
+    show: bool = True,
+) -> None:
     probe_positions = np.array([params.L / 4.0, params.L / 2.0, 3.0 * params.L / 4.0])
     probe_indices = [
         int(np.argmin(np.abs(result.x - position))) for position in probe_positions
@@ -477,7 +557,12 @@ def plot_final_result(result, params: SimulationParams, title: str) -> None:
     ax4.grid(True)
 
     plt.tight_layout(rect=[0, 0, 1, 0.92])
-    plt.show()
+    if save_path is not None:
+        fig.savefig(save_path, dpi=200, bbox_inches="tight")
+    if show:
+        plt.show()
+    else:
+        plt.close(fig)
 
 
 def main() -> None:
@@ -506,6 +591,9 @@ def main() -> None:
         )
     else:
         run_specs = [(base_params, args.init_mode, None, None)]
+
+    if args.dry_run != 1:
+        args.output_dir.mkdir(parents=True, exist_ok=True)
 
     for run_index, (params, mode, hopf_point, hopf_config) in enumerate(run_specs):
         print(
@@ -548,8 +636,25 @@ def main() -> None:
             f"last_residual={result.residuals[-1]:.6e}"
         )
 
+        base_name = f"run_{run_index + 1:03d}"
+        plot_path = args.output_dir / f"{base_name}_final.png"
+        data_path = args.output_dir / f"{base_name}_result.npz"
+        save_result_data(
+            result,
+            params,
+            mode,
+            args.amp,
+            data_path,
+            hopf_point=hopf_point,
+            hopf_config=hopf_config,
+        )
+        print(f"Saved result data: {data_path}")
+
         if plot == 0:
-            plot_final_result(result, params, run_title)
+            plot_final_result(result, params, run_title, save_path=plot_path, show=True)
+        else:
+            plot_final_result(result, params, run_title, save_path=plot_path, show=False)
+        print(f"Saved final plot: {plot_path}")
 
     if args.dry_run == 1:
         return
