@@ -4,6 +4,7 @@ from collections import deque
 from dataclasses import dataclass
 import os
 from typing import Callable
+import warnings
 
 os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
 
@@ -37,6 +38,7 @@ class SimulationParams:
     sweep_tol: float = 1.0e-4
     stagnation_tol: float = 1.0e-5
     max_sweeps: int = 200
+    cfl_warning_threshold: float = 1.0
 
 
 @dataclass
@@ -69,20 +71,20 @@ def triangular_delay_weights(
     if dt <= 0:
         raise ValueError("dt must be positive")
 
-    history_steps = int(np.round(tau / dt)) + 1
-    if history_steps % 2 == 0:
-        history_steps += 1
+    delay_steps_float = tau / dt
+    delay_steps = int(np.round(delay_steps_float))
+    if not np.isclose(delay_steps_float, delay_steps, rtol=1.0e-12, atol=1.0e-12):
+        raise ValueError("tau must be an integer multiple of dt for delay history alignment")
 
-    s_vec = np.linspace(-tau, 0.0, history_steps)
-    h = np.zeros(history_steps, dtype=float)
+    s_vec = dt * np.arange(-delay_steps, 1, dtype=float)
+    h = np.zeros(s_vec.size, dtype=float)
 
     left = (-tau <= s_vec) & (s_vec <= -epsilon)
     right = (-epsilon <= s_vec) & (s_vec <= 0.0)
     h[left] = 2.0 / (tau * (tau - epsilon)) * (s_vec[left] + tau)
     h[right] = -2.0 / (tau * epsilon) * s_vec[right]
 
-    ds = s_vec[1] - s_vec[0]
-    weights = h * ds
+    weights = h * dt
     if normalize:
         total = float(np.sum(weights))
         if total == 0:
@@ -199,6 +201,8 @@ def run_simulation(
     max_u = np.empty(nt, dtype=float)
     mean_u = np.empty(nt, dtype=float)
     cfl = np.zeros(nt, dtype=float)
+    cfl_warning_printed = False
+    sweep_warning_printed = False
 
     min_u[0] = float(np.min(u.value))
     max_u[0] = float(np.max(u.value))
@@ -229,6 +233,16 @@ def run_simulation(
         if velocity is not None:
             velocity_value = np.asarray(velocity.value, dtype=float)
             cfl[step] = float(np.max(np.abs(velocity_value)) * params.dt / dx)
+            if cfl[step] > params.cfl_warning_threshold and not cfl_warning_printed:
+                warnings.warn(
+                    "High convection CFL detected: "
+                    f"step={step}, time={step * params.dt:.6g}, "
+                    f"cfl={cfl[step]:.6g}, threshold={params.cfl_warning_threshold:.6g}. "
+                    "Large CFL can affect phase, amplitude, and numerical diffusion.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                cfl_warning_printed = True
 
         resid = np.inf
         last_resid = np.inf
@@ -239,6 +253,17 @@ def run_simulation(
             if abs(resid - last_resid) < params.stagnation_tol:
                 break
             last_resid = resid
+
+        if resid > params.sweep_tol and not sweep_warning_printed:
+            reason = "max_sweeps" if count >= params.max_sweeps else "stagnation"
+            warnings.warn(
+                "FiPy sweep exited before reaching sweep_tol: "
+                f"step={step}, time={step * params.dt:.6g}, residual={resid:.6g}, "
+                f"sweep_tol={params.sweep_tol:.6g}, sweeps={count}, reason={reason}.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            sweep_warning_printed = True
 
         u_history.append(u.value.copy())
         if store_history:

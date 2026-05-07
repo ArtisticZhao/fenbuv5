@@ -47,6 +47,7 @@ def save_result_data(
         sweep_tol=params.sweep_tol,
         stagnation_tol=params.stagnation_tol,
         max_sweeps=params.max_sweeps,
+        cfl_warning_threshold=params.cfl_warning_threshold,
         initial_mode=mode,
         amplitude=amplitude,
         hopf_enabled=True,

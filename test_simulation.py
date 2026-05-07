@@ -39,6 +39,17 @@ def test_delay_weights_constant_history() -> None:
     assert_small_range("constant history delay average", averaged, constant, 2.0e-2)
 
 
+def test_delay_weights_require_dt_alignment() -> None:
+    try:
+        triangular_delay_weights(tau=2.0, epsilon=1.5, dt=0.03)
+    except ValueError as exc:
+        if "integer multiple" not in str(exc):
+            raise AssertionError(f"unexpected error message: {exc}") from exc
+    else:
+        raise AssertionError("expected non-aligned tau/dt to raise ValueError")
+    print("PASS delay grid rejects non-aligned tau/dt")
+
+
 def test_constant_steady_state() -> None:
     params = SimulationParams(
         d1=1.0,
@@ -101,7 +112,7 @@ def test_logistic_reaction_against_exact_solution() -> None:
         Nx=51,
         dt=0.001,
         Tend=0.05,
-        sweep_tol=1.0e-12,
+        sweep_tol=1.0e-6,
         stagnation_tol=1.0e-14,
     )
     initial = lambda x: 0.8 + 0.01 * np.cos(2.0 * np.pi * x / params.L)
@@ -143,6 +154,7 @@ def test_short_full_model_sanity() -> None:
 def main() -> None:
     tests = [
         test_delay_weights_constant_history,
+        test_delay_weights_require_dt_alignment,
         test_constant_steady_state,
         test_heat_equation_mode_decay,
         test_logistic_reaction_against_exact_solution,

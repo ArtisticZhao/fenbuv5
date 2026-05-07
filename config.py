@@ -120,6 +120,8 @@ def validate_run_config(config: RunConfig) -> None:
         raise ValueError("model.stagnation_tol must be non-negative")
     if model.max_sweeps <= 0:
         raise ValueError("model.max_sweeps must be positive")
+    if model.cfl_warning_threshold <= 0:
+        raise ValueError("model.cfl_warning_threshold must be positive")
 
     if not hopf.n_list:
         raise ValueError("hopf.n_list must not be empty")
