@@ -14,7 +14,7 @@ from hopf_branch import (
     HopfSearchConfig,
     HopfPoint,
     compute_hopf_branches,
-    hopf_points_from_branches,
+    hopf_polynomial_fits_from_branches,
     plot_hopf_branches,
 )
 from reaction_diffusion_delay import (
@@ -220,6 +220,24 @@ def parse_args() -> argparse.Namespace:
         default=format_int_list(HOPF_DEFAULTS.k_list),
         help="Comma-separated k list used by Hopf search.",
     )
+    parser.add_argument(
+        "--poly-degree",
+        type=int,
+        default=HOPF_DEFAULTS.polynomial_degree,
+        help="Degree of the local polynomial used to refine Hopf roots.",
+    )
+    parser.add_argument(
+        "--poly-window",
+        type=int,
+        default=HOPF_DEFAULTS.polynomial_window,
+        help="Number of neighboring epsilon samples used by local polynomial root refinement.",
+    )
+    parser.add_argument(
+        "--poly-plot-points",
+        type=int,
+        default=HOPF_DEFAULTS.polynomial_plot_points,
+        help="Number of samples used to draw each local polynomial fit.",
+    )
     return parser.parse_args()
 
 
@@ -259,6 +277,9 @@ def find_hopf_simulation_params(
     omega_max: float,
     n_list: tuple[int, ...],
     k_list: tuple[int, ...],
+    polynomial_degree: int,
+    polynomial_window: int,
+    polynomial_plot_points: int,
     plot_hopf: bool,
     block_hopf_plot: bool = False,
 ) -> list[tuple[SimulationParams, int, HopfPoint, HopfSearchConfig]]:
@@ -285,6 +306,9 @@ def find_hopf_simulation_params(
         omega_max=omega_max,
         num_eps=num_eps,
         num_omega=num_omega,
+        polynomial_degree=polynomial_degree,
+        polynomial_window=polynomial_window,
+        polynomial_plot_points=polynomial_plot_points,
     )
     print(
         "Finding Hopf branch points with "
@@ -294,7 +318,20 @@ def find_hopf_simulation_params(
         f"fu={config.fu}, tau={config.tau}, l={config.domain_factor}."
     )
     branches = compute_hopf_branches(config)
-    points = hopf_points_from_branches(branches, config)
+    polynomial_fits = hopf_polynomial_fits_from_branches(branches, config)
+    points = [
+        HopfPoint(
+            epsilon=fit.epsilon,
+            omega=fit.omega,
+            n=fit.n,
+            k=fit.k,
+            mu=fit.mu,
+            branch_index=fit.branch_index,
+            s_value=fit.s_value,
+        )
+        for fit in polynomial_fits
+    ]
+    points.sort(key=lambda p: (abs(p.s_value), p.n, p.k, p.epsilon, p.omega))
 
     print("Hopf branch scan summary:")
     for branch in branches:
@@ -307,11 +344,23 @@ def find_hopf_simulation_params(
 
     if not points:
         if plot_hopf:
-            plot_hopf_branches(branches, config, show=True, block=block_hopf_plot)
+            plot_hopf_branches(
+                branches,
+                config,
+                show=True,
+                block=block_hopf_plot,
+                polynomial_fits=polynomial_fits,
+            )
         raise RuntimeError("No Hopf branch candidates found.")
     if candidate_index is not None and not 0 <= candidate_index < len(points):
         if plot_hopf:
-            plot_hopf_branches(branches, config, show=True, block=block_hopf_plot)
+            plot_hopf_branches(
+                branches,
+                config,
+                show=True,
+                block=block_hopf_plot,
+                polynomial_fits=polynomial_fits,
+            )
         raise ValueError(
             f"hopf-index must be between 0 and {len(points) - 1}; got {candidate_index}"
         )
@@ -324,7 +373,13 @@ def find_hopf_simulation_params(
         )
 
     if plot_hopf:
-        plot_hopf_branches(branches, config, show=True, block=block_hopf_plot)
+        plot_hopf_branches(
+            branches,
+            config,
+            show=True,
+            block=block_hopf_plot,
+            polynomial_fits=polynomial_fits,
+        )
 
     selected_points = points if candidate_index is None else [points[candidate_index]]
     if candidate_index is None:
@@ -586,6 +641,9 @@ def main() -> None:
             args.omega_max,
             parse_int_list(args.n_list),
             parse_int_list(args.k_list),
+            args.poly_degree,
+            args.poly_window,
+            args.poly_plot_points,
             args.plot_hopf == 1,
             args.dry_run == 1,
         )
